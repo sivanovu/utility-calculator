@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#101828">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Utility Calc">
+  <title>Utility Calculator</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Общий итог</p>
+      <div class="grand-total" id="grandTotal">0.00 ₽</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-button" id="saveButton" type="button" aria-label="Сохранить">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5V3Zm3 2v5h8V5H8Zm0 10v4h8v-4H8Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="intro">
+      <div>
+        <h1>Калькулятор коммунальных платежей</h1>
+        <p>Введите текущие показания. Расчет, детализация и сохранение выполняются локально на устройстве.</p>
+      </div>
+      <div class="status-pill" id="saveStatus">Автосохранение включено</div>
+    </section>
+
+    <section class="dashboard-grid" aria-label="Расчет коммунальных платежей">
+      <article class="card provider-card provider-card-wide" id="powerCard"></article>
+      <article class="card provider-card" id="moekCard"></article>
+      <article class="card provider-card" id="waterCard"></article>
+    </section>
+
+    <section class="card details-card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Проверка</p>
+          <h2>Расшифровка расчета</h2>
+        </div>
+      </div>
+      <div class="details-grid" id="detailsGrid"></div>
+    </section>
+
+    <section class="actions-card">
+      <button class="primary-action" id="manualSaveButton" type="button">Сохранить</button>
+      <button class="secondary-action" id="newMonthButton" type="button">Начать новый месяц</button>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "utility-calculator:v1";
+
+    const TARIFFS = {
+      T1_PEAK: 10.40,
+      T2_NIGHT: 3.77,
+      T3_HALFPEAK: 7.28,
+      HEAT_TARIFF: 3035.13,
+      GVS_COEFFICIENT: 0.066,
+      COLD_WATER: 66.87,
+      SEWER_COLD: 52.48,
+      SEWER_HOT: 52.48
+    };
+
+    const DEFAULT_STATE = {
+      power: {
+        t1: { label: "Т1 Пик", prev: "37", current: "" },
+        t2: { label: "Т2 Ночь", prev: "26", current: "" },
+        t3: { label: "Т3 Полупик", prev: "38", current: "" }
+      },
+      moek: {
+        hot: {
+          g1: { label: "18_1935204", prev: "25.142", current: "" },
+          g2: { label: "18_1935212", prev: "29.040", current: "" },
+          g3: { label: "19_2225784", prev: "4.624", current: "" }
+        },
+        heat: { gcal: "0.74776", cost: "2269.55" }
+      },
+      water: {
+        cold: {
+          c1: { label: "18-1935195", prev: "32.000", current: "" },
+          c2: { label: "19-2224291", prev: "6.000", current: "" },
+          c3: { label: "19-2225839", prev: "31.000", current: "" }
+        }
+      }
+    };
+
+    let state = loadState();
+
+    const els = {
+      grandTotal: document.querySelector("#grandTotal"),
+      saveStatus: document.querySelector("#saveStatus"),
+      powerCard: document.querySelector("#powerCard"),
+      moekCard: document.querySelector("#moekCard"),
+      waterCard: document.querySelector("#waterCard"),
+      detailsGrid: document.querySelector("#detailsGrid"),
+      saveButton: document.querySelector("#saveButton"),
+      manualSaveButton: document.querySelector("#manualSaveButton"),
+      newMonthButton: document.querySelector("#newMonthButton")
+    };
+
+    function deepMerge(base, saved) {
+      if (!saved || typeof saved !== "object") return cloneData(base);
+      const result = Array.isArray(base) ? [] : {};
+      Object.keys(base).forEach((key) => {
+        if (base[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
+          result[key] = deepMerge(base[key], saved[key]);
+        } else {
+          result[key] = saved[key] ?? base[key];
+        }
+      });
+      return result;
+    }
+
+    function loadState() {
+      try {
+        return deepMerge(DEFAULT_STATE, JSON.parse(localStorage.getItem(STORAGE_KEY)));
+      } catch {
+        return cloneData(DEFAULT_STATE);
+      }
+    }
+
+    function cloneData(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function saveState(showStatus = false) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch {
+        setStatus("Не удалось сохранить локально");
+        return;
+      }
+      if (showStatus) {
+        setStatus("Сохранено");
+      } else {
+        setStatus("Автосохранено");
+      }
+    }
+
+    function setStatus(text) {
+      els.saveStatus.textContent = text;
+      window.clearTimeout(setStatus.timer);
+      setStatus.timer = window.setTimeout(() => {
+        els.saveStatus.textContent = "Автосохранение включено";
+      }, 1600);
+    }
+
+    function parseValue(value) {
+      const normalized = String(value ?? "").trim().replace(",", ".");
+      if (!normalized) return null;
+      const parsed = Number.parseFloat(normalized);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function numberOrZero(value) {
+      return parseValue(value) ?? 0;
+    }
+
+    function positiveConsumption(current, prev) {
+      const currentValue = parseValue(current);
+      const prevValue = parseValue(prev);
+      if (currentValue === null || prevValue === null) {
+        return { usage: 0, prev: prevValue ?? 0, current: currentValue, invalid: false, empty: currentValue === null };
+      }
+      const raw = currentValue - prevValue;
+      return { usage: Math.max(0, raw), prev: prevValue, current: currentValue, invalid: raw < 0, empty: false };
+    }
+
+    function money(value) {
+      return `${value.toFixed(2)} ₽`;
+    }
+
+    function volume(value) {
+      return value.toFixed(3);
+    }
+
+    function gcal(value) {
+      return value.toFixed(6);
+    }
+
+    function inputField(path, value, label, step = "0.001") {
+      return `
+        <label class="field">
+          <span>${label}</span>
+          <input data-path="${path}" type="text" inputmode="decimal" autocomplete="off" value="${escapeHtml(value)}" aria-label="${label}" placeholder="0" data-step="${step}">
+        </label>
+      `;
+    }
+
+    function meterRow(pathBase, meter, unit) {
+      return `
+        <div class="meter-row">
+          <div class="meter-title">
+            <strong>${meter.label}</strong>
+            <span>${unit}</span>
+          </div>
+          <div class="field-grid">
+            ${inputField(`${pathBase}.prev`, meter.prev, "Было")}
+            ${inputField(`${pathBase}.current`, meter.current, "Стало")}
+          </div>
+        </div>
+      `;
+    }
+
+    function render(focusPath = null) {
+      const result = calculate();
+
+      els.grandTotal.textContent = money(result.total);
+      renderPower(result.power);
+      renderMoek(result.moek);
+      renderWater(result.water);
+      renderDetails(result);
+      bindInputs();
+      restoreFocus(focusPath);
+    }
+
+    function renderPower(power) {
+      els.powerCard.innerHTML = `
+        <div class="card-header">
+          <div class="provider-icon provider-icon-power" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M13 2 4 13h7l-1 9 10-13h-7l1-7Z"/></svg>
+          </div>
+          <div>
+            <p class="eyebrow">Электроэнергия</p>
+            <h2>Мосэнергосбыт</h2>
+          </div>
+        </div>
+        <div class="tariff-strip">
+          <span>T1 ${TARIFFS.T1_PEAK.toFixed(2)}</span>
+          <span>T2 ${TARIFFS.T2_NIGHT.toFixed(2)}</span>
+          <span>T3 ${TARIFFS.T3_HALFPEAK.toFixed(2)}</span>
+        </div>
+        <div class="meter-list">
+          ${meterRow("power.t1", state.power.t1, "кВт·ч")}
+          ${meterRow("power.t2", state.power.t2, "кВт·ч")}
+          ${meterRow("power.t3", state.power.t3, "кВт·ч")}
+        </div>
+        <div class="summary-list">
+          ${power.items.map((item) => resultLine(item.label, `${volume(item.usage)} кВт·ч`, money(item.cost), item.invalid)).join("")}
+        </div>
+        <div class="provider-total">
+          <span>Потребление</span><strong>${volume(power.consumption)} кВт·ч</strong>
+          <span>К оплате</span><strong>${money(power.cost)}</strong>
+        </div>
+      `;
+    }
+
+    function renderMoek(moek) {
+      els.moekCard.innerHTML = `
+        <div class="card-header">
+          <div class="provider-icon provider-icon-heat" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2c3 4 4 6 1 9 2-1 4-3 4-6 3 3 5 7 5 11a10 10 0 1 1-20 0c0-4 2-7 5-10-1 5 1 7 3 8-1-5 1-8 2-12Z"/></svg>
+          </div>
+          <div>
+            <p class="eyebrow">Тепло и ГВС</p>
+            <h2>МОЭК</h2>
+          </div>
+        </div>
+        <div class="tariff-strip">
+          <span>${TARIFFS.HEAT_TARIFF.toFixed(2)} ₽/Гкал</span>
+          <span>коэф. ${TARIFFS.GVS_COEFFICIENT.toFixed(3)}</span>
+        </div>
+        <h3>ГВС</h3>
+        <div class="meter-list">
+          ${meterRow("moek.hot.g1", state.moek.hot.g1, "м³")}
+          ${meterRow("moek.hot.g2", state.moek.hot.g2, "м³")}
+          ${meterRow("moek.hot.g3", state.moek.hot.g3, "м³")}
+        </div>
+        <div class="summary-list">
+          ${moek.hot.items.map((item) => resultLine(item.label, `${volume(item.usage)} м³`, money(item.cost), item.invalid, `${gcal(item.heat)} Гкал`)).join("")}
+        </div>
+        <h3>Отопление</h3>
+        <div class="field-grid standalone-fields">
+          ${inputField("moek.heat.gcal", state.moek.heat.gcal, "Потребление, Гкал", "0.00001")}
+          ${inputField("moek.heat.cost", state.moek.heat.cost, "Стоимость, ₽", "0.01")}
+        </div>
+        <div class="provider-total">
+          <span>ГВС</span><strong>${money(moek.hot.cost)}</strong>
+          <span>Отопление</span><strong>${money(moek.heat.cost)}</strong>
+          <span>Итого</span><strong>${money(moek.total)}</strong>
+        </div>
+      `;
+    }
+
+    function renderWater(water) {
+      els.waterCard.innerHTML = `
+        <div class="card-header">
+          <div class="provider-icon provider-icon-water" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2s7 7 7 13a7 7 0 0 1-14 0c0-6 7-13 7-13Zm-4 13a4 4 0 0 0 4 4v-2a2 2 0 0 1-2-2H8Z"/></svg>
+          </div>
+          <div>
+            <p class="eyebrow">Вода и водоотведение</p>
+            <h2>Мосводоканал</h2>
+          </div>
+        </div>
+        <div class="tariff-strip">
+          <span>ХВС ${TARIFFS.COLD_WATER.toFixed(2)}</span>
+          <span>Водоотв. ${TARIFFS.SEWER_COLD.toFixed(2)}</span>
+        </div>
+        <h3>ХВС</h3>
+        <div class="meter-list">
+          ${meterRow("water.cold.c1", state.water.cold.c1, "м³")}
+          ${meterRow("water.cold.c2", state.water.cold.c2, "м³")}
+          ${meterRow("water.cold.c3", state.water.cold.c3, "м³")}
+        </div>
+        <div class="summary-list">
+          ${water.cold.items.map((item) => resultLine(item.label, `${volume(item.usage)} м³`, "", item.invalid)).join("")}
+        </div>
+        <div class="provider-total">
+          <span>ХВС</span><strong>${volume(water.cold.consumption)} м³</strong>
+          <span>Стоимость ХВС</span><strong>${money(water.cold.cost)}</strong>
+          <span>Водоотведение ХВС</span><strong>${money(water.sewerCold)}</strong>
+          <span>Водоотведение ГВС</span><strong>${money(water.sewerHot)}</strong>
+          <span>Итого</span><strong>${money(water.total)}</strong>
+        </div>
+      `;
+    }
+
+    function resultLine(title, primary, amount, invalid, secondary = "") {
+      return `
+        <div class="result-line ${invalid ? "is-warning" : ""}">
+          <span>${title}</span>
+          <strong>${primary}</strong>
+          ${secondary ? `<em>${secondary}</em>` : ""}
+          ${amount ? `<b>${amount}</b>` : ""}
+          ${invalid ? `<small>Проверьте: значение "Стало" меньше "Было"</small>` : ""}
+        </div>
+      `;
+    }
+
+    function renderDetails(result) {
+      const powerDetails = result.power.items.map((item) => `
+        <div class="formula">
+          <strong>${item.label}</strong>
+          <span>${formatRaw(item.current)} - ${formatRaw(item.prev)} = ${volume(item.usage)} кВт·ч</span>
+          <span>${volume(item.usage)} × ${item.tariff.toFixed(2)} = ${money(item.cost)}</span>
+        </div>
+      `).join("");
+
+      const moekDetails = result.moek.hot.items.map((item) => `
+        <div class="formula">
+          <strong>${item.label}</strong>
+          <span>${formatRaw(item.current)} - ${formatRaw(item.prev)} = ${volume(item.usage)} м³</span>
+          <span>${volume(item.usage)} × ${TARIFFS.GVS_COEFFICIENT.toFixed(3)} = ${gcal(item.heat)} Гкал</span>
+          <span>${gcal(item.heat)} × ${TARIFFS.HEAT_TARIFF.toFixed(2)} = ${money(item.cost)}</span>
+        </div>
+      `).join("");
+
+      const waterDetails = result.water.cold.items.map((item) => `
+        <div class="formula">
+          <strong>${item.label}</strong>
+          <span>${formatRaw(item.current)} - ${formatRaw(item.prev)} = ${volume(item.usage)} м³</span>
+        </div>
+      `).join("");
+
+      els.detailsGrid.innerHTML = `
+        <div class="details-column">
+          <h3>Мосэнергосбыт</h3>
+          ${powerDetails}
+        </div>
+        <div class="details-column">
+          <h3>МОЭК</h3>
+          ${moekDetails}
+          <div class="formula">
+            <strong>Отопление</strong>
+            <span>${gcal(result.moek.heat.gcal)} Гкал</span>
+            <span>${money(result.moek.heat.cost)}</span>
+          </div>
+        </div>
+        <div class="details-column">
+          <h3>Мосводоканал</h3>
+          ${waterDetails}
+          <div class="formula">
+            <strong>Итого</strong>
+            <span>${volume(result.water.cold.consumption)} × ${TARIFFS.COLD_WATER.toFixed(2)} = ${money(result.water.cold.cost)}</span>
+            <span>${volume(result.water.cold.consumption)} × ${TARIFFS.SEWER_COLD.toFixed(2)} = ${money(result.water.sewerCold)}</span>
+            <span>${volume(result.moek.hot.consumption)} × ${TARIFFS.SEWER_HOT.toFixed(2)} = ${money(result.water.sewerHot)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function calculate() {
+      const powerItems = [
+        calcPowerItem("t1", TARIFFS.T1_PEAK),
+        calcPowerItem("t2", TARIFFS.T2_NIGHT),
+        calcPowerItem("t3", TARIFFS.T3_HALFPEAK)
+      ];
+      const power = {
+        items: powerItems,
+        consumption: sum(powerItems, "usage"),
+        cost: sum(powerItems, "cost")
+      };
+
+      const hotItems = ["g1", "g2", "g3"].map(calcHotItem);
+      const hotConsumption = sum(hotItems, "usage");
+      const hotHeat = sum(hotItems, "heat");
+      const hotCost = sum(hotItems, "cost");
+      const heatCost = numberOrZero(state.moek.heat.cost);
+      const heatGcal = numberOrZero(state.moek.heat.gcal);
+      const moek = {
+        hot: { items: hotItems, consumption: hotConsumption, heat: hotHeat, cost: hotCost },
+        heat: { gcal: heatGcal, cost: heatCost },
+        total: hotCost + heatCost
+      };
+
+      const coldItems = ["c1", "c2", "c3"].map(calcColdItem);
+      const coldConsumption = sum(coldItems, "usage");
+      const coldCost = coldConsumption * TARIFFS.COLD_WATER;
+      const sewerCold = coldConsumption * TARIFFS.SEWER_COLD;
+      const sewerHot = hotConsumption * TARIFFS.SEWER_HOT;
+      const water = {
+        cold: { items: coldItems, consumption: coldConsumption, cost: coldCost },
+        sewerCold,
+        sewerHot,
+        total: coldCost + sewerCold + sewerHot
+      };
+
+      return {
+        power,
+        moek,
+        water,
+        total: power.cost + moek.total + water.total
+      };
+    }
+
+    function calcPowerItem(key, tariff) {
+      const meter = state.power[key];
+      const consumption = positiveConsumption(meter.current, meter.prev);
+      return {
+        label: meter.label,
+        tariff,
+        ...consumption,
+        cost: consumption.usage * tariff
+      };
+    }
+
+    function calcHotItem(key) {
+      const meter = state.moek.hot[key];
+      const consumption = positiveConsumption(meter.current, meter.prev);
+      const heat = consumption.usage * TARIFFS.GVS_COEFFICIENT;
+      return {
+        label: meter.label,
+        ...consumption,
+        heat,
+        cost: heat * TARIFFS.HEAT_TARIFF
+      };
+    }
+
+    function calcColdItem(key) {
+      const meter = state.water.cold[key];
+      return {
+        label: meter.label,
+        ...positiveConsumption(meter.current, meter.prev)
+      };
+    }
+
+    function sum(items, key) {
+      return items.reduce((total, item) => total + item[key], 0);
+    }
+
+    function bindInputs() {
+      document.querySelectorAll("[data-path]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          const path = event.currentTarget.dataset.path;
+          setByPath(path, event.currentTarget.value);
+          saveState();
+          render(path);
+        }, { once: true });
+      });
+    }
+
+    function restoreFocus(path) {
+      if (!path) return;
+      requestAnimationFrame(() => {
+        const input = Array.from(document.querySelectorAll("[data-path]"))
+          .find((item) => item.dataset.path === path);
+        if (!input) return;
+        input.focus({ preventScroll: true });
+        const cursor = input.value.length;
+        input.setSelectionRange(cursor, cursor);
+      });
+    }
+
+    function setByPath(path, value) {
+      const parts = path.split(".");
+      const last = parts.pop();
+      const target = parts.reduce((current, part) => current[part], state);
+      target[last] = value;
+    }
+
+    function startNewMonth() {
+      updateMeterGroup(state.power);
+      updateMeterGroup(state.moek.hot);
+      updateMeterGroup(state.water.cold);
+      saveState(true);
+      render();
+    }
+
+    function updateMeterGroup(group) {
+      Object.values(group).forEach((meter) => {
+        if (parseValue(meter.current) !== null) {
+          meter.prev = normalizeInput(meter.current);
+          meter.current = "";
+        }
+      });
+    }
+
+    function normalizeInput(value) {
+      return String(value ?? "").trim().replace(",", ".");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function formatRaw(value) {
+      const parsed = parseValue(value);
+      return parsed === null ? "0" : String(parsed);
+    }
+
+    els.saveButton.addEventListener("click", () => saveState(true));
+    els.manualSaveButton.addEventListener("click", () => saveState(true));
+    els.newMonthButton.addEventListener("click", startNewMonth);
+
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js");
+      });
+    }
+
+    render();
+  </script>
+</body>
+</html>
