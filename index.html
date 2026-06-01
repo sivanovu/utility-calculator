@@ -58,7 +58,7 @@
   </main>
 
   <script>
-    const STORAGE_KEY = "utility-calculator:v1";
+    const STORAGE_KEY = "utility-calculator:v2";
 
     const TARIFFS = {
       T1_PEAK: 10.40,
@@ -73,9 +73,9 @@
 
     const DEFAULT_STATE = {
       power: {
-        t1: { label: "Т1 Пик", prev: "37", current: "" },
-        t2: { label: "Т2 Ночь", prev: "26", current: "" },
-        t3: { label: "Т3 Полупик", prev: "38", current: "" }
+        t1: { label: "Т1 Пик", prev: "1456", current: "" },
+        t2: { label: "Т2 Ночь", prev: "1809", current: "" },
+        t3: { label: "Т3 Полупик", prev: "1763", current: "" }
       },
       moek: {
         hot: {
@@ -236,6 +236,7 @@
           </div>
         </div>
         <div class="tariff-strip">
+          <span>База 24.04.2026</span>
           <span>T1 ${TARIFFS.T1_PEAK.toFixed(2)}</span>
           <span>T2 ${TARIFFS.T2_NIGHT.toFixed(2)}</span>
           <span>T3 ${TARIFFS.T3_HALFPEAK.toFixed(2)}</span>
